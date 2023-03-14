@@ -1,0 +1,234 @@
+---
+title: "EBC4223 - ASSIGNMENT 1"
+author: "Quang Phong - Robert Agatić"
+date: "2/14/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = normalizePath("D:/OneDrive/1st-goal-innovation/project-analyze-unstructured-data/3-week3/assignment-1"))
+```
+
+# PART 1: INTRODUCTION
+The goal of this assignment is to prepare the text data containing ~25 reviews of each of the top 100 movies in 2019 so that we can relate it to movie revenue.
+
+**Import libraries**
+```{r, message=FALSE}
+library(tm)
+library(qdap)
+library(SnowballC)
+library(dplyr)
+library(PerformanceAnalytics)
+```
+
+**Import data**
+```{r}
+load("Data movie reviews final.RData")
+```
+
+**Have a look of the data for movies**
+```{r}
+# rename the data frame
+df_Movies <- moviedescriptives 
+
+# get an overview of the first 6 movies
+head(df_Movies)
+```
+```{r}
+# get an overview of variables
+str(df_Movies)
+```
+This data set is about `r colnames(df_Movies)` of 100 movies.
+
+**Have a look of the data set for reviews**
+```{r}
+# rename the data frame
+df_Reviews <- reviews 
+
+# get an overview of the first 6 movies
+head(df_Reviews, 1)
+```
+```{r}
+summary(df_Reviews)
+```
+```{r}
+dim(df_Reviews)
+```
+This data set is about `r colnames(df_Reviews)` of 2469 reviews.
+
+
+# PART 2: DATA PREPROCESSING
+
+
+**Ensure the review text is in text format**
+```{r}
+df_Reviews$review_text <- as.character(df_Reviews$review_text)
+```
+
+**Get an overview of the first 5 reviews**
+```{r}
+df_Reviews$review_text[1:5]
+```
+
+
+**Obtain the length of each review and add it to review data set**
+```{r}
+df_Reviews$length <- nchar(df_Reviews$review_text)
+head(df_Reviews$length)
+```
+**Describe and plot the amount of characters**
+```{r}
+summary(df_Reviews$length)
+hist(df_Reviews$length)
+boxplot(length~movie_id, data = df_Reviews, main = "Characters per movie reviews",
+        xlab = "Movie ID", ylab = "Number of characters")
+```
+
+
+**Obtain average review length for each movie and add it to movie data set**
+```{r}
+tempdf_ReviewLength <- df_Reviews %>%
+  group_by(Release) %>%
+  summarize(averageReviewLength = mean(length))
+head(tempdf_ReviewLength)
+```
+```{r}
+# Merge the average review length to df_Movies
+df_Movies <- df_Movies %>%
+  inner_join(tempdf_ReviewLength, by = "Release")
+
+head(df_Movies)
+```
+
+**Remove punctuations from review data**
+```{r}
+df_Reviews$review_text2 <- removePunctuation(df_Reviews$review_text)
+head(df_Reviews$review_text2, 1)
+```
+**Remove numbers from review data**
+```{r}
+df_Reviews$review_text2 <- removeNumbers(df_Reviews$review_text2)
+head(df_Reviews$review_text2, 1)
+```
+**Lower texts from review data**
+```{r}
+df_Reviews$review_text2 <- tolower(df_Reviews$review_text2)
+head(df_Reviews$review_text2, 1)
+```
+
+**Remove excess white space from review data**
+```{r}
+df_Reviews$review_text2 <- stripWhitespace(df_Reviews$review_text2)
+head(df_Reviews$review_text2, 1)
+```
+
+**Remove potentially problematic symbols from review data**
+```{r, results='hide'}
+# apply(df_Reviews['review_text'], 1, function(x) gsub("[[:punct:]]", "", x))
+df_Reviews$review_text2 <- gsub("[[:punct:]]", "", df_Reviews$review_text2)
+```
+
+**Create variable indicating the amount of words**
+```{r}
+df_Reviews$amount_words <- sapply(strsplit(df_Reviews$review_text2, " "), length)
+```
+
+**Remove stop words from review data**
+```{r}
+# Here, we choose to remove stop words in the built-in dictionary. 
+df_Reviews$review_text2 <- removeWords(df_Reviews$review_text2, stopwords("en"))
+head(df_Reviews$review_text2, 1)
+
+# Another choice to remove all stop words in the dictionary except for "not", by:
+# stop_words <- stop_words("english")
+# stop_words <- stop_words(-which(stop_words=="not"))
+```
+
+**Stem review data**
+```{r}
+df_Reviews$review_text2 <- stemDocument(df_Reviews$review_text2, language = "english")
+head(df_Reviews$review_text2, 1)
+```
+
+
+# PART 3: ANALYSIS
+
+
+**Calculate polarity scores for each individual review**
+```{r}
+df_Reviews$polarity <- as.numeric(counts(polarity(df_Reviews$review_text2))[, "polarity"]) 
+# apart from qdap, we can also use sentimentR library
+```
+
+**Describe and plot the polarity scores**
+```{r}
+summary(df_Reviews$polarity)
+hist(df_Reviews$polarity)
+boxplot(polarity~movie_id, data = df_Reviews,
+        main = "Polarity score per movie review",
+        xlab = "Movie ID",
+        ylab = "Polarity Score")
+```
+
+
+**Obtain average review polarity, standard deviation and add them to movie data**
+```{r}
+tempdf_ReviewPolarity <- df_Reviews %>%
+  group_by(Release) %>%
+  summarize(reviewPolarity = mean(polarity),
+            stdPolarity = sd(polarity))
+head(tempdf_ReviewPolarity)
+```
+
+```{r}
+# Merge the average polarity to df_Movies
+df_Movies <- df_Movies %>%
+  inner_join(tempdf_ReviewPolarity, by = "Release")
+
+head(df_Movies)
+```
+
+**Run regression models to explain revenue variable**
+
+```{r}
+model1 <- lm(Gross ~ reviewPolarity, data = df_Movies)
+model2  <- lm(Gross ~ reviewPolarity+stdPolarity, data = df_Movies)
+model3 <- lm(Gross ~ reviewPolarity+stdPolarity+averageReviewLength, data = df_Movies)
+model4 <- lm(Gross ~ reviewPolarity+stdPolarity+averageReviewLength+`Max Th`, data = df_Movies)
+```
+
+```{r}
+summary(model1)
+summary(model2)
+summary(model3)
+summary(model4)
+```
+**Run regression models with ln of revenue variable as outcome variable**
+```{r}
+df_Movies$lnGross <- log(df_Movies$Gross)
+```
+
+
+```{r}
+model5 <- lm(lnGross ~ reviewPolarity, data = df_Movies)
+model6  <- lm(lnGross ~ reviewPolarity+stdPolarity, data = df_Movies)
+model7 <- lm(lnGross ~ reviewPolarity+stdPolarity+averageReviewLength, data = df_Movies)
+model8 <- lm(lnGross ~ reviewPolarity+stdPolarity+averageReviewLength+`Max Th`, data = df_Movies)
+```
+
+```{r}
+summary(model5)
+summary(model6)
+summary(model7)
+summary(model8)
+```
+**Save and restore my entire workspace**
+```{r}
+save.image(file = "assignment1.RData")
+saveRDS(df_Reviews,"df_Reviews.RDS")
+saveRDS(df_Movies,"df_Movies.RDS")
+```
+
