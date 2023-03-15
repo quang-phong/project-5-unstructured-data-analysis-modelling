@@ -13,10 +13,10 @@ Author: **Quang Phong**
 Year: 2022
 
 ## 🧐 What?
-"Unstructured Data Analysis and Modelling" is an series of subjects in which the author attempts to process, analyze and build Machine Learning models for data that is not structured and tabular. The data are in text, image, and audio formats.
+"Unstructured Data Analysis and Modelling" is an series of subprojects in which the author attempts to process, analyze and build Machine Learning models for data that are not structured and tabular. The data are in text, image, and audio formats.
 
 ## 🤷 Why?  
-Business digitization has increased the amount of data available within organizations. Firms and managers are now tasked with extracting insights from these new and expanding data sources. Challenges arise when we consider the nature of these new digital forms of data. One issue is that data is becoming increasingly unstructured (e.g., text 📜, visual 📸, and audio data 🎧), necessitating different methods of analysis than traditional (structured) data forms. Aside from that, it is unclear how we can use this data in day-to-day business operations. Firms and managers can benefit from new insights only when we can process these data and link them to business-relevant outcomes. 
+Business digitization has increased the amount of data available within organizations. Firms and managers are now tasked with extracting insights from these new and expanding data sources. Challenges arise when we consider the nature of these new digital forms of data. One issue is that data is becoming increasingly unstructured (e.g., text 📜, visual 📸, and audio data 🎧), necessitating different methods of analysis than traditional (structured) data forms. Aside from that, it is unclear how we can use these data in day-to-day business operations. Firms and managers can benefit from new insights only when we can process these data and link them to business-relevant outcomes. 
 
 ## ⚒️ How?  
 | No. | Data | Unstructured format | Preprocessing techniques | Analytical methods |
