@@ -21,13 +21,13 @@ Business digitization has increased the amount of data available within organiza
 ## ⚒️ How?  
 | No. | Data | Unstructured format | Preprocessing techniques | Analytical methods |
 | - | - | - | - | - | 
-| 1 | Movie reviews | Text | Text feature mining, special character removal, stemming | Sentiment analysis, revenue predictive modelling |
-| 2 | Movie reviews | Text | Topic modelling, word embedding | Revenue predictive modelling  |  
-| 3 | Human faces | Image | Pixel representation, principal component analysis (PCA) | Average face presentation, original face recovering, face recognition | 
-| 4 | Clothing item images | Image | Transparency removal, color extraction, line extraction, texture extraction | Brand classification, product classification | 
-| 5 | Human voice | Audio | Acoustic feature extraction: frequency, standard deviation, jitter, shimmer, harmonic-to-noise ratio, pitch, loudness, timbre | - | 
-| 6 | Food-related pictures | Image | Color extraction, line extraction, texture extraction | Content classification |
-| 7 | Vehicle sound | Audio | Acoustic feature extraction: frequency, standard deviation, jitter, shimmer, harmonic-to-noise ratio, pitch, loudness, timbre | Sound source (vehicle) recognition |
+| 1 | Movie reviews 📜 | **Text** | Text feature mining, special character removal, stemming | Sentiment analysis, revenue predictive modelling |
+| 2 | Movie reviews 📜 | **Text** | Topic modelling, word embedding | Revenue predictive modelling  |  
+| 3 | Human faces 😉 | **Image** | Pixel representation, principal component analysis (PCA) | Average face presentation, original face recovering, face recognition | 
+| 4 | Clothing item images 👖 | **Image** | Transparency removal, color extraction, line extraction, texture extraction | Brand classification, product classification | 
+| 5 | Human voice 🎤 | **Audio** | Acoustic feature extraction: frequency, standard deviation, jitter, shimmer, harmonic-to-noise ratio, pitch, loudness, timbre | - | 
+| 6 | Food-related pictures 🍜 | **Image** | Color extraction, line extraction, texture extraction | Content classification |
+| 7 | Vehicle sound 🚑 | **Audio** | Acoustic feature extraction: frequency, standard deviation, jitter, shimmer, harmonic-to-noise ratio, pitch, loudness, timbre | Sound source (vehicle) recognition |
 
 ## 🧱 Structure?
 This repository contains 4 folders:
