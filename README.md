@@ -20,7 +20,7 @@ Business digitization has increased the amount of data available within organiza
 
 ## ⚒️ How?  
 | No. | Data | Unstructured format | Preprocessing techniques | Analytical methods |
-| - | - | - | - | - | - |
+| - | - | - | - | - | 
 | 1 | Movie reviews | Text | Text feature mining, special character removal, stemming | Sentiment analysis, revenue predictive modelling |
 | 2 | Movie reviews | Text | Topic modelling, word embedding | Revenue predictive modelling  |  
 | 3 | Human faces | Image | Pixel representation, principal component analysis (PCA) | Average face presentation, original face recovering, face recognition | 
