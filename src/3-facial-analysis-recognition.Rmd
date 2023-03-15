@@ -1,0 +1,189 @@
+---
+title: "EBC4223 - -Assignment 3"
+author: "Quang Phong - Robert Agatić"
+date: "3/7/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = normalizePath("D:/OneDrive/1st-goal-innovation/project-analyze-unstructured-data/5-week5/assignment-3"))
+knitr::opts_chunk$set(fig.width=12, fig.height=12) 
+```
+
+
+# INTRODUCTION
+In this assignment, the data is processed into a digital format, and the salient facial information is extracted using the Eigenface method (Xia & Ding 2014). Then, an image detection algorithm will be implemented.
+
+```{r, message=FALSE, warning=FALSE}
+library(pixmap) #for import, export, plotting and other manipulations of bitmapped images
+```
+
+**Question 1: Load data**
+
+The data can be imported using the pixmap library and the function pnm(), and stored as a list. Each element of the list represents one image. Using plot() on an element of the list, you can view the image.
+```{r, warning=FALSE}
+# Produce a character vector of the names of files in the named directory
+allFiles <- list.files(path = "faces", pattern = ".pgm", full.names = T)
+
+# Choose a random subset of 20 files in the list
+set.seed(1010)
+selectedFiles <- sample(allFiles, 20)
+
+# Look at 20 random files
+selectedFiles
+
+# Import 20 images
+pictures <- lapply(selectedFiles, FUN = function(f) read.pnm(f))
+
+# View the images
+for (x in pictures) {
+  plot(x)
+}
+```
+# DATA PREPROCESSING AND EXPLORATION
+
+**Question 2: See pixel representation**
+
+Use the @grey attribute of the pixmap image to see the pixel representation of the image. Note that each image is 64x64 pixels in size.
+```{r}
+# See dimension
+dim(pictures[[1]]@grey)
+
+# Look at 10x10 first pixels
+pictures[[1]]@grey[1:10, 1:10]
+```
+
+**Question 3: compute the average face**
+
+Create a matrix where each column represents a pixel, and each row an image. By applying colMeans() to this matrix, we can compute the “average” face. Plot this face using the image() (hint: Make sure to convert the mean vector into a 64x64 matrix again, and use byrow = TRUE).
+```{r}
+# Create empty list
+empty_list <- vector(mode="list", length=20)
+
+# Add all pixels of an image to each row
+for (i in 1:20) {
+  empty_list[[i]] <- as.vector(pictures[[i]]@grey)
+}
+
+# Turn the list into the matrix
+matrix1 <- matrix(unlist(empty_list), byrow=TRUE, nrow = 20)
+```
+
+```{r}
+# Compute the average face by taking the average of each column
+meanVector <- colMeans(matrix1)
+length(meanVector)
+meanVector[1:10]
+```
+```{r}
+# Convert the mean vector into a 64x64 matrix again
+averageFace <- matrix(meanVector,  byrow=TRUE, nrow=64)
+
+# Plot this average face
+image(averageFace, col=grey(seq(0,1,length=256)))
+```
+```{r}
+# Plot this average face upside down
+image(averageFace[, nrow(averageFace):1], 
+      col=grey(seq(0,1,length=256)))
+```
+
+**Question 4: Reduce the large set of image files**
+
+Apply principal components analysis (PCA) to the matrix with all images using the prcomp() PCA reduces the large set of image files to a smaller set of vectors called principal components. This makes analysis a lot easier.
+```{r}
+pca <- prcomp(matrix1, scale = TRUE)
+names(pca)
+```
+**Question 5: Determine the number of principal components to retain**
+
+Determine an appropriate number of principal components to retain, using the results from the summary of the prcomp Select the number of components such that 90% of the cumulative variance is explained.
+```{r}
+summary(pca)
+```
+We will retain 11 principal components (from a total of 20). 
+
+**Question 6: Plot eigenfaces**
+
+The eigenvectors related to these principal components represent the eigenfaces. They are stored in the $rotation attribute of the prcomp object, each column representing an eigenvector. Plot the first 10 eigenfaces using the image() function, and describe what you see.
+```{r}
+for (y in 1:10) {
+  a <- matrix(pca$rotation[,y],  byrow=TRUE, nrow=64)
+  image(a[, nrow(a):1], col=grey(seq(0,1,length=256)))
+}
+
+```
+
+**Quesion 7: Recover an image**
+We can also recover the original faces by multiplying the eigenvectors with the x attribute of the prcomp object, i.e. prcomp$x[,1:n] %*% t(prcomp$rotation[,1:n]) where n represent the number of components determined in 5). To this outcome, add the average face vector as well (see Xia and Ding 2014). Plot an original and recovered face for comparison
+```{r}
+# Recover the original faces by multiplying the eigenvectors with the x attribute of the prcomp object
+recoveredFaces <- pca$x[,1:11] %*% t(pca$rotation[,1:11])
+```
+
+```{r}
+# Plot the original face 1
+plot(pictures[[1]])
+```
+
+```{r}
+# Convert the 1st vector in recoveredFaces into a 64x64 matrix again
+recoveredFace1 <- matrix(recoveredFaces [1,],  byrow=TRUE, nrow=64)
+
+# Plot the recovered face 1 upside down
+image(recoveredFace1[, nrow(recoveredFace1):1], 
+      col=grey(seq(0,1,length=256)))
+```
+
+**Question 8: Image detection**
+Let’s built a simple image detection algorithm. Image detection works by comparing a focal image to the set of eigenfaces. This works by computing the Euclidean distance between the focal image vector, and the eigenface vector (computed in 7). Compute the Euclidean distance between one image of your choice, and all eigenface vectors. Which eigenface combination has minimum distance? This should be the focal image you selected.
+
+Here we use a picture of Emma Watson already in the database and used in the sample. 
+```{r}
+euclidean <- function(a, b) sqrt(sum((a - b)^2))
+
+for (i in 1:11) {
+  print(paste(i, ":", euclidean(matrix1[[1]], pca$rotation[,i])))
+}
+
+```
+It has the smallest distance to eigenface 7.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

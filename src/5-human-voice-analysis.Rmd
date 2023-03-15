@@ -1,0 +1,217 @@
+---
+title: "Assignment 5"
+author: "Quang and Robert"
+date: '2022-03-22'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = normalizePath("D:/OneDrive/1st-goal-innovation/project-analyze-unstructured-data/7-week7/assignment-5"))
+knitr::opts_chunk$set(fig.width=12, fig.height=12) 
+```
+
+\newpage
+
+## INTRODUCTION
+
+In this assignment, we will use data from Anikin and Persson (2017), who collected audio from Youtube clips, and classified the associated emotion of the audio. The data consist of 260 audio clips. Next to the clips, a ratings file is available containing the actual emotion (real.em) as well as respondent’s ratings for each emotion on each audio clip. We will see how well statistical models compare to human raters when it comes to audio emotion recognition.
+    
+    
+##  DATA AND LIBRARY PREPARATION
+
+We install and load the following libraries for this assignment. We will use the packages soundgen, its dependency seewave, and tuneR as the basic dependency for the analysis
+
+```{r, warning = FALSE, message = FALSE}
+library(soundgen)
+library(seewave)
+library(tuneR)
+library(caret)
+library(e1071)
+library(MLmetrics)
+```
+
+**Question 1: read audio data** 
+
+Now, we use readMP3() to read in the audio files into R.
+
+```{r}
+# Produce a character vector of the names of files in the named directory
+df_AudioFiles <- list.files(path = "260sounds_mp3", pattern = ".mp3", full.names = T)
+
+# Apply readMP3 for all the files
+df_Audio <- lapply(df_AudioFiles, FUN = function (f) readMP3(f))
+
+# Understand our data type
+class(df_Audio)
+length(df_Audio)
+class(df_Audio[[1]])
+```
+
+**Question 2: load ratings data and obtain human predicted emotions**
+
+Next, we load the ratings file using csv(). 
+```{r}
+df_Rating <- read.csv("ratings_compiled_preprocessed.csv")
+
+dim(df_Rating)
+head(df_Rating)
+```
+
+For each audio clip, obtain the human predicted emotion as the emotion for which the score of that clip is the highest among emotions rated.
+```{r}
+# This is not necessary because that column is already included in the rating dataset
+df_Rating$humanPredictedEmotion <- colnames(df_Rating[, 3:11])[apply(df_Rating[, 3:11], 1, which.max)]
+```
+
+
+```{r}
+df_Model  <-  subset(df_Rating,  TRUE,  c(sound,  emotion))
+head(df_Model)
+dim(df_Model)
+```
+
+**Question 3: extract acoustic features**
+
+The next step is to extract some acoustic features from the audio clips. Extract the fundamental frequency of each clip using the fund()  Include two features based on the fundamental frequency: The average frequency across the clip, and the standard deviation. Omit NA values from your calculations.
+    
+```{r}
+fundaFreq <- lapply(df_Audio, FUN = function(f)
+  fund(f, plot = FALSE))
+
+# Have a look at the output
+class(fundaFreq)
+fundaFreq[[1]]
+
+# When plot is FALSE, fund returns a two-column matrix, the first column corresponding to time in seconds (x-axis) and the second column corresponding to to fundamental frequency in kHz (y-axis). NA corresponds to pause sections in wave (see threshold). 
+
+# Omit NA values
+fundaFreq2 <- lapply(fundaFreq, FUN = function(f) na.omit(f))
+
+# Extract audios without any non-NA fundamental frequencies
+which(sapply(fundaFreq2, function(f) (nrow(f) == 0)))
+
+# Omit these audios in the model dataset
+df_Model2 <- df_Model[which(sapply(fundaFreq2, function(f) (nrow(f) > 0))), ]
+dim(df_Model2)
+
+# Omit corresponding elements in the fundamental frequency list
+fundaFreq3 <- fundaFreq2[sapply(fundaFreq2, function(f) (nrow(f) > 0))]
+
+# Calculate average frequency and standard deviation and merge it to the rating model dataset
+df_Model2 <- data.frame(cbind(df_Model2, t(vapply(fundaFreq3, FUN = function(f) c(meanFundaFreq = mean(f), sdFundaFreq = sd(f)), numeric(2)))))
+head(df_Model2)
+
+```
+
+**Question 4: compute jitter**
+Jitter is defined as the average absolute difference in fundamental frequency across the clip. Compute this using the fund() function, and omit NA values from your calculation.
+
+```{r}
+# Create a function to calculate average absolute difference, given y as the index of column 
+CalculateAveAbsDiff <- function(x, y) {
+  sum <- 0
+  if (nrow(x) == 1) {
+    return(x[1, y])
+  }
+  else {
+  for (i in 1:(nrow(x)-1)) {
+    sum <- sum + abs((x[i, y] - x[i + 1, y]))
+  }
+  return(sum/(nrow(x)-1))
+  }
+}
+
+
+df_Model2$jitter <- sapply(fundaFreq3, CalculateAveAbsDiff, y=2)
+```
+
+
+**Question 5: compute shimmer**
+Shimmer is defined as the average absolute difference in amplitude across the clip. Use the env() function with envt = “abs” to extract the amplitude across the clip, and compute the shimmer.
+
+```{r}
+amplitude <- lapply(df_Audio, FUN = function(f)
+  env(f, envt = "abs", plot = FALSE))
+
+# Calculate shimmer and merge it to rating model dataset (only 255 values)
+df_Model2$shimmer <- sapply(amplitude, CalculateAveAbsDiff, y = 1)[sapply(fundaFreq2, function(f) (nrow(f) > 0))] 
+```
+
+**Question 6: extract harmonic-to-noise ratio, pitch, loudness, and timbre**
+
+Some other features can be extracted using the analyze()/analyzeFolder(). Note that the latter function operates directly on the directory where the sounds are stored, so point it there. Use pitchMethods = "autocor" as your method of choice. The function returns harmonic-to-noise ratio (mean and standard deviation), pitch (mean and standard deviation), loudness (mean and standard deviation), and timbre (as specCentroid, mean and standard deviation). Extract these features.
+
+```{r, warning = FALSE}
+CalculateFeatures <- function (x) {
+  return(analyze(x, pitchMethods = "autocor")$summary[, c("HNR_mean", "HNR_sd", "pitch_mean", "pitch_sd", "loudness_mean", "loudness_sd", "specCentroidVoiced_mean", "specCentroidVoiced_sd")])
+}
+
+df_Model2 <- data.frame(cbind(df_Model2,t(sapply(df_Audio[sapply(fundaFreq2, function(f) (nrow(f) > 0))], CalculateFeatures))))
+```
+
+**Question 7: append features to ratings dataset**
+
+Append all extracted features to the ratings dataset. This has been done in all the sections above.
+
+Then, split the dataset in a 80% training and 20% holdout set.
+
+```{r}
+# convert labeled variables into factor variables
+df_Model2$emotion <- as.factor(df_Model2$emotion)
+
+# convert all independent variables into numeric
+df_Model2[, -c(1:2)] <- sapply(df_Model2[, -c(1:2)], as.numeric)
+
+# Omit rows with NA values 
+df_Model3 <- na.omit(df_Model2)
+```
+
+
+```{r}
+# feature scaling, for classification it’s better to do feature scaling additionally we have variables where the units are not the same. Is it necessary?
+
+
+# train-test data split using caret library
+set.seed(1010)
+trainIndex <- createDataPartition(df_Model3$emotion, p = .8, list = FALSE, times = 1)
+train <- df_Model3[trainIndex,]
+test <- df_Model3[-trainIndex,]
+xTrain <- subset(train, select = -emotion)
+yTrain <- subset(train, select = emotion)
+xTest <- subset(test, select = -emotion)
+yTest <- subset(test, select = emotion)
+```
+
+
+**Question 8: modelling**
+Estimate models of your choice on the training dataset, and generate predictions for the holdout dataset. Note that the objective is to predict the emotion of a clip, which is a multinomial variable; take this into account in your model selection. Compare the model predictions to those of human raters. How well do your models compare to human raters in terms of accuracy, recall and F1 score (use MLmetrics for functions)?
+    
+```{r}
+# classification model for emotion using e1071 library
+model1 <- svm(emotion ~ .-sound,
+                  data = train,
+                  type = 'C-classification',
+                  kernel = 'radial')
+
+# Make prediction
+yPred1 <- predict(model1, xTest)
+
+# Precision, Recall, Accuracy, F1-Score for emotion classification
+df_Performance1 <- data.frame(
+  precision = Precision(yTest$emotion, 
+                         yPred1,
+                         positive = NULL),
+  recall = Recall(yTest$emotion, 
+                   yPred1,
+                   positive = NULL),
+  accuracy = Accuracy(yTest$emotion, 
+                       yPred1),
+  f1Score = F1_Score(yTest$emotion, 
+                       yPred1)
+)
+
+df_Performance1
+```
+    
+

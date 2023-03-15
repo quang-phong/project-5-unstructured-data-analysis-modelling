@@ -1,0 +1,563 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = normalizePath("D:/OneDrive/1st-goal-innovation/project-analyze-unstructured-data/9-exam"))
+knitr::opts_chunk$set(fig.width=12, fig.height=12) 
+```
+## Image analysis: 11 credits
+
+Introduction of the assignment:
+- Purpose: to develop model to predict picture content (4 categories). 
+- Data: 
++ Train data: 400 images (and labels) from Yelp
++ Test data: 100 images (and labels) from Yelp
+
+```{r, warning = FALSE, include = FALSE}
+# Import necessary libraries
+library(imager)
+library(colordistance) 
+library(wvtool)
+library(e1071)
+library(caret)
+library(MLmetrics)
+library(LiblineaR)
+library(randomForest)
+```
+
+**Question 8: Image feature extraction**
+
+First, during execution, I encounter several corrupt files. They are actually .png files but renamed as .jpg, thus cannot be loaded in later stages. 
+
+```{r eval = FALSE}
+# This code was used to find error files. I ran it in a later stage.
+for (i in 1:length(allFiles)) {
+  tryCatch(loadImage(allFiles[i]), error = function(e) {
+     print(allFiles[i])
+   })
+}
+
+# Below are the error files:
+# [1] "stud_25/EE5QMQkCyaHG5lPqqM7Ajw.jpg"
+# [1] "stud_25/fG70IDtfBOdvXIHVemWAzw.jpg"
+```
+
+It turns out there are only 2 corrupt files. Therefore, I will choose to simply delete them from the data set.
+
+```{r}
+# Produce a character vector of the names of 400 train files in the named directory
+allFiles <- list.files(path = "stud_25", pattern = ".jpg", full.names = T)
+
+## Do the same for 100 test files
+allTestFiles <- list.files(path = "test_photos", pattern = ".jpg", full.names = T)
+
+# Remove 2 train files
+allFiles <- allFiles[!allFiles %in% 
+                       c("stud_25/EE5QMQkCyaHG5lPqqM7Ajw.jpg", 
+                         "stud_25/fG70IDtfBOdvXIHVemWAzw.jpg")]
+
+
+# Import all images and remove alpha channel
+pictures <- lapply(lapply(allFiles, load.image), FUN = function(f) rm.alpha(f))
+
+## Do the same for 100 test files
+picturesTest <- lapply(lapply(allTestFiles, load.image), FUN = function(f) rm.alpha(f))
+
+# View the first 12 images in train files
+par(mfrow=c(4, 3)) # set the plotting area into a 6*5 array to save space
+for (x in pictures[1:12]) {
+  plot(x, axes = FALSE) # remove axes
+}
+
+# Make sure the images in list pictures2 only contain three channels
+pictures[[1]]
+```
+First, I will extract color histograms.
+
+RGB and HSV color histograms can be extracted using the getImageHist(). One particularity is that it requires images loaded by the loadImage() function. Hence, I will load the images using this function as well. As numbers of bins, I will take 3. The arguments hsv (TRUE/FALSE) determines whether an RGB or HSV histogram is produced. The first three columns of the function output contain the histogram for each colour channel. We create 2 matrices with 81 columns (3\*3\*3*3) for each of the RGB and HSV histograms.
+
+```{r}
+# Create 2 empty matrices first. These matrix will store value of rgb and hsv for each picture later.
+matRGB <- matrix(0, nrow = length(allFiles), ncol = 81)
+matHSV <- matrix(0, nrow = length(allFiles), ncol = 81)
+
+for (i in 1:length(allFiles)) {
+  
+  # RGB histogram
+  void <- suppressMessages(getImageHist(
+    loadImage(allFiles[i]), bins = 3, hsv = FALSE, plotting = FALSE))
+  matRGB[i, ] <- unlist(void[, 1:3])
+  colnames(matRGB) <- names(unlist(void[, 1:3]))
+  
+  # HSV histogram
+  void <- suppressMessages(getImageHist(
+    loadImage(allFiles[i]), bins = 3, hsv = TRUE, plotting = FALSE))
+  matHSV[i, ] <- unlist(void[, 1:3])
+  colnames(matHSV) <- names(unlist(void[, 1:3]))
+}
+
+dim(matHSV)
+dim(matRGB)
+```
+```{r}
+## Do the same for 100 test files.
+# Create 2 empty matrices first. These matrix will store value of rgb and hsv for each picture later.
+matRGBTest <- matrix(0, nrow = length(allTestFiles), ncol = 81)
+matHSVTest <- matrix(0, nrow = length(allTestFiles), ncol = 81)
+
+for (i in 1:length(allTestFiles)) {
+  
+  # RGB histogram
+  void <- suppressMessages(getImageHist(loadImage(allTestFiles[i]), bins = 3, 
+                                        hsv = FALSE, plotting = FALSE))
+  matRGBTest[i, ] <- unlist(void[, 1:3])
+  colnames(matRGBTest) <- names(unlist(void[, 1:3]))
+  
+  # HSV histogram
+  void <- suppressMessages(getImageHist(loadImage(allTestFiles[i]), bins = 3, 
+                                        hsv = TRUE, plotting = FALSE))
+  matHSVTest[i, ] <- unlist(void[, 1:3])
+  colnames(matHSVTest) <- names(unlist(void[, 1:3]))
+}
+
+dim(matHSVTest)
+dim(matRGBTest)
+```
+
+Second, I will extract the number of lines.
+
+All images are initially turned to gray scale before being pre-preprocessed using the cannyEdges() function. Then hough_line() is employed to obtain the number of lines within an image. As I only want to retain the number of most important lines, I will select those lines for which the score is in the .995th percentile or higher with the quantile() function.
+
+```{r}
+# Convert the RGB images to grayscale using grayscale() in "imager" package
+picturesGray <- lapply(pictures, 
+                    FUN = function(f) grayscale(f))
+
+## Do the same for 100 test files.
+picturesGrayTest <- lapply(picturesTest, 
+                    FUN = function(f) grayscale(f))
+```
+
+```{r}
+# Create one empty matrix first. 
+# This matrix will store the number of lines for each picture later.
+matHough <- matrix(0, nrow = length(picturesGray), ncol = 1)
+
+for (i in 1:length(picturesGray)) {
+
+  void <- hough_line(cannyEdges(picturesGray[[i]]), ntheta = 800, data.frame = TRUE)
+  matHough[i, ] <- nrow(subset(void, score > quantile(score, .9995)))
+  colnames(matHough) <- "numberLines"
+}
+
+dim(matHough)
+```
+
+```{r}
+## Do the same for 100 test files.
+
+# Create one empty matrix first. 
+# This matrix will store the number of lines for each picture later.
+matHoughTest <- matrix(0, nrow = length(picturesGrayTest), ncol = 1)
+
+for (i in 1:length(picturesGrayTest)) {
+
+  void <- hough_line(cannyEdges(picturesGrayTest[[i]]), ntheta = 800, data.frame = TRUE)
+  matHoughTest[i, ] <- nrow(subset(void, score > quantile(score, .9995)))
+  colnames(matHoughTest) <- "numberLines"
+}
+
+dim(matHoughTest)
+```
+
+Third, I will extract Local Binary Pattern, a method for texture feature extraction.
+
+Similar to the previous step, all images need to be of gray scale first by applying grayscale(), of which output I only need the first two dimensions that contain the image matrix. Then I create a histogram with 26 breaks from the LBP output using hist() on the ori argument of the output, and use the counts per cell as features in my labels data set.
+
+```{r}
+# Create one empty matrix first. 
+# This matrix will store the counts of 26 breaks from the LBP output for each picture later.
+matLBP <- matrix(0, nrow = length(picturesGray), ncol = 26)
+
+for (i in 1:length(picturesGray)) {
+  matLBP[i, ] <- hist(lbp(picturesGray[[i]][,,1,1])$lbp.ori, 
+                      breaks = 26, plot = FALSE)$count
+}
+
+colnames(matLBP) <- paste0("LBP", seq(1, 26, 1))
+
+dim(matLBP)
+```
+
+
+```{r}
+## Do the same for 100 test files.
+
+# Create one empty matrix first. 
+# This matrix will store the counts of 26 breaks from the LBP output for each picture later.
+matLBPTest <- matrix(0, nrow = length(picturesGrayTest), ncol = 26)
+
+for (i in 1:length(picturesGrayTest)) {
+
+  matLBPTest[i, ] <- hist(lbp(picturesGrayTest[[i]][,,1,1])$lbp.ori, 
+                          breaks = 26, plot = FALSE)$count
+}
+
+colnames(matLBPTest) <- paste0("LBP", seq(1, 26, 1))
+
+dim(matLBPTest)
+```
+
+**Question 9: Explanation and Dataset merging**
+
+In question 8, I extract color histograms, the number of lines and local binary patterns for images. Color histograms are summaries of color palettes in a picture. For this image dataset, I observe and notice that colors can tell many things about the labels. For example, pictures about food tend to have a warm tone, they have some combinations of yellow, brown and red colors. Meanwhile, pictures about drink are more about white and the tone is more monotonous lighter. 
+
+```{r}
+# histogram for a food picture
+
+temp <- loadImage(allFiles[18])
+par(mfrow = c(3,1))
+hist(temp[[2]][,,1], breaks = "Sturges", density = FALSE, main = "Red", xlab="Color value")
+hist(temp[[2]][,,2], breaks = "Sturges", density = FALSE, main = "Green", xlab="Color value")
+hist(temp[[2]][,,3], breaks = "Sturges", density = FALSE, main = "Blue", xlab="Color value")
+```
+```{r}
+# histogram for a drink picture
+
+temp <- loadImage(allFiles[19])
+par(mfrow = c(3,1))
+hist(temp[[2]][,,1], breaks = "Sturges", density = FALSE, main = "Red", xlab="Color value")
+hist(temp[[2]][,,2], breaks = "Sturges", density = FALSE, main = "Green", xlab="Color value")
+hist(temp[[2]][,,3], breaks = "Sturges", density = FALSE, main = "Blue", xlab="Color value")
+```
+As can be seen, the color distribution for this food picture is more even, which means there is more combination of red-blue-green in the picture, creating a vibrant look.
+
+The number of lines is extracted because based on observation, it appears to me that shape detection can help classify images. For example, drink is usually in the form of a cup or a glass which is relatively cylinder. Meanwhile, food is usually served in plates of circle shape or square shape. Pictures about outside seem to be more complex in terms of shape. 
+
+```{r}
+# hough line for food picture
+a <- subset(hough_line(cannyEdges(picturesGray[[18]]), ntheta = 800, data.frame = TRUE), score > quantile(score, .99995))
+
+plot(picturesGray[[18]]); nfline(a$theta, a$rho, col = 'purple')
+```
+```{r}
+# hough line for drink picture
+a <- subset(hough_line(cannyEdges(picturesGray[[26]]), ntheta = 800, data.frame = TRUE), score > quantile(score, .99995))
+
+plot(picturesGray[[26]]); nfline(a$theta, a$rho, col = 'purple')
+```
+
+Last, I extract LBP because textures of these images can serve to help point out which photo belongs to a label. Textures for drinks appear to be not as sophisticated as the textures of food images and "inside" images.
+
+```{r, warning = FALSE}
+# lbp for food picture
+void <- lbp(picturesGray[[18]][,,1,1])
+image(rot90c(void$lbp.u2), col = gray((0:58)/58), main = "lbp.u2 r = 1, 8 points)",
+      useRaster = TRUE, asp = 1, axes = FALSE)
+
+# lbp for drink picture
+void <- lbp(picturesGray[[26]][,,1,1])
+image(rot90c(void$lbp.u2), col = gray((0:58)/58), main = "lbp.u2 r = 1, 8 points)",
+      useRaster = TRUE, asp = 1, axes = FALSE)
+```
+
+
+Now, I will load the label data set for training and testing.
+
+```{r}
+# Load label dataset and test label dataset.
+load("Labels_photos_25.RData")
+load("test_labels.RData")
+```
+
+I also need to remove 2 rows for 2 deleted corrupt files.
+
+```{r}
+df_PhotoLabels <- subset(photo_labels, !(photo_id %in% c("EE5QMQkCyaHG5lPqqM7Ajw",
+                                                      "fG70IDtfBOdvXIHVemWAzw")))
+rm(photo_labels)
+dim(df_PhotoLabels)
+
+
+df_PhotoLabelsTest <- photos.test
+rm(photos.test)
+dim(df_PhotoLabelsTest)
+
+# Here, I need to rearrange df_PhotoLabels and df_PhotoLabelsTest in alphabetical order
+# to match with the extracted features later
+# which have been both sorted based on the photo_id from the beginning
+df_PhotoLabels <- df_PhotoLabels[order(df_PhotoLabels$photo_id), ]
+df_PhotoLabelsTest <- df_PhotoLabelsTest[order(df_PhotoLabelsTest$photo_id), ]
+```
+
+```{r}
+# Combine extracted features with the labeled dataset
+df_PhotoLabels <- cbind(df_PhotoLabels, matRGB, matHSV, matHough, matLBP)
+
+## Do the same for 100 test files.
+df_PhotoLabelsTest <- cbind(df_PhotoLabelsTest, matRGBTest, matHSVTest, matHoughTest, matLBPTest)
+```
+
+
+**Question 10: Classification models**
+
+Here I will develop 4 classification models to predict the content of an image based on extracted features: 
+
+- Support Vector Machine (with linear kernel)
+- Support Vector Machine (with radial kernel)
+- L1-Regularized L2-Loss SVM 
+- Random Forest
+
+An import notice here is that although I will report accuracy, recall, F1-score using MLmetrics for all the 4 models (for test set) and 4 models (for train set), my discussion later will revolve around the reports from caret library with function confusionMatrix(). The function from caret library not only shows the confusion matrix but it also reports the recall and precision for **each of the class**. Meanwhile, the result for recall and precision from MLmetrics are only calculated for the first class, which may be misleading for interpretation. 
+
+```{r}
+# Convert labeled variables into factor variables
+df_PhotoLabels$label <- as.factor(df_PhotoLabels$label)
+df_PhotoLabelsTest$label <- as.factor(df_PhotoLabelsTest$label)
+
+# Convert all independent variables into numeric
+df_PhotoLabels[, -c(1:4)] <- sapply(df_PhotoLabels[, -c(1:4)], as.numeric)
+df_PhotoLabelsTest[, -c(1:4)] <- sapply(df_PhotoLabelsTest[, -c(1:4)], as.numeric)
+
+# Here, I do not need to split train-test data split as it has been done already
+set.seed(1010)
+
+xTrain <- subset(df_PhotoLabels, select = -label)
+yTrain <- subset(df_PhotoLabels, select = label)
+xTest <- subset(df_PhotoLabelsTest, select = -label)
+yTest <- subset(df_PhotoLabelsTest, select = label)
+```
+
+
+```{r}
+# Linear SVM classification model for label using e1071 library
+modelSVMLinear <- svm(label ~ .-caption-photo_id-business_id,
+                  data = df_PhotoLabels,
+                  type = 'C-classification',
+                  kernel = 'linear')
+
+
+# Make prediction (test)
+yPredSVMLinearTest <- predict(modelSVMLinear, xTest)
+
+# Precision, Recall, Accuracy, F1-Score for label classification (test)
+df_PerformanceSVMLinearTest <- list(data.frame(
+  precision = Precision(yTest$label, 
+                         yPredSVMLinearTest),
+  recall = Recall(yTest$label, 
+                   yPredSVMLinearTest),
+  accuracy = Accuracy(yTest$label, 
+                       yPredSVMLinearTest),
+  f1Score = F1_Score(yTest$label, 
+                       yPredSVMLinearTest)),
+  confusionMatrix(table(yPredSVMLinearTest, yTest$label))
+)
+
+df_PerformanceSVMLinearTest
+
+
+
+# Make prediction (train)
+yPredSVMLinearTrain <- predict(modelSVMLinear, xTrain)
+
+# Precision, Recall, Accuracy, F1-Score for label classification (test)
+df_PerformanceSVMLinearTrain <- list(data.frame(
+  precision = Precision(yTrain$label, 
+                         yPredSVMLinearTrain),
+  recall = Recall(yTrain$label, 
+                   yPredSVMLinearTrain),
+  accuracy = Accuracy(yTrain$label, 
+                       yPredSVMLinearTrain),
+  f1Score = F1_Score(yTrain$label, 
+                       yPredSVMLinearTrain)),
+  confusionMatrix(table(yPredSVMLinearTrain, yTrain$label))
+)
+
+df_PerformanceSVMLinearTrain
+```
+```{r}
+# Radial SVM classification model for label using e1071 library
+modelSVMRadial <- svm(label ~ .-caption-photo_id-business_id,
+                  data = df_PhotoLabels,
+                  type = 'C-classification',
+                  kernel = 'radial')
+
+
+
+# Make prediction (Test)
+yPredSVMRadialTest <- predict(modelSVMRadial, xTest)
+
+# Precision, Recall, Accuracy, F1-Score for label classification (Test)
+df_PerformanceSVMRadialTest <- list(data.frame(
+  precision = Precision(yTest$label, 
+                         yPredSVMRadialTest),
+  recall = Recall(yTest$label, 
+                   yPredSVMRadialTest),
+  accuracy = Accuracy(yTest$label, 
+                       yPredSVMRadialTest),
+  f1Score = F1_Score(yTest$label, 
+                       yPredSVMRadialTest)
+), confusionMatrix(table(yPredSVMRadialTest, yTest$label)))
+
+df_PerformanceSVMRadialTest
+
+
+
+# Make prediction (Train)
+yPredSVMRadialTrain <- predict(modelSVMRadial, xTrain)
+
+# Precision, Recall, Accuracy, F1-Score for label classification (Train)
+df_PerformanceSVMRadialTrain <- list(data.frame(
+  precision = Precision(yTrain$label, 
+                         yPredSVMRadialTrain),
+  recall = Recall(yTrain$label, 
+                   yPredSVMRadialTrain),
+  accuracy = Accuracy(yTrain$label, 
+                       yPredSVMRadialTrain),
+  f1Score = F1_Score(yTrain$label, 
+                       yPredSVMRadialTrain)
+), confusionMatrix(table(yPredSVMRadialTrain, yTrain$label)))
+
+df_PerformanceSVMRadialTrain
+```
+
+```{r}
+set.seed(1209)
+# L1-Regularized L2-Loss SVM classification model for label
+modelL1L2SVM <- LiblineaR(df_PhotoLabels[, -c(1:4)],
+                          target = df_PhotoLabels$label,
+                          type = 5)
+
+
+
+# Make prediction (Test)
+yPredL1L2SVMTest <- predict(modelL1L2SVM, xTest)$predictions
+
+# Precision, Recall, Accuracy, F1-Score for label classification (Test)
+df_PerformanceL1L2SVMTest <- list(data.frame(
+  precision = Precision(yTest$label, 
+                         yPredL1L2SVMTest),
+  recall = Recall(yTest$label, 
+                   yPredL1L2SVMTest),
+  accuracy = Accuracy(yTest$label, 
+                       yPredL1L2SVMTest),
+  f1Score = F1_Score(yTest$label, 
+                       yPredL1L2SVMTest)
+), confusionMatrix(table(yPredL1L2SVMTest, yTest$label)))
+
+df_PerformanceL1L2SVMTest
+
+
+
+# Make prediction (Train)
+yPredL1L2SVMTrain <- predict(modelL1L2SVM, xTrain)$predictions
+
+# Precision, Recall, Accuracy, F1-Score for label classification (Train)
+df_PerformanceL1L2SVMTrain <- list(data.frame(
+  precision = Precision(yTrain$label, 
+                         yPredL1L2SVMTrain),
+  recall = Recall(yTrain$label, 
+                   yPredL1L2SVMTrain),
+  accuracy = Accuracy(yTrain$label, 
+                       yPredL1L2SVMTrain),
+  f1Score = F1_Score(yTrain$label, 
+                       yPredL1L2SVMTrain)
+), confusionMatrix(table(yPredL1L2SVMTrain, yTrain$label)))
+
+df_PerformanceL1L2SVMTrain
+
+```
+
+
+
+```{r}
+# Random Forest classification model for label
+
+modelRF <- randomForest(label ~ .-caption-photo_id-business_id,
+                        data = df_PhotoLabels,
+                        importance = TRUE,
+                        proximity = TRUE)
+
+
+
+# Make prediction (Test)
+yPredRFTest <- predict(modelRF, xTest)
+
+# Precision, Recall, Accuracy, F1-Score for label classification (Test)
+df_PerformanceRFTest <- list(data.frame(
+  precision = Precision(yTest$label, 
+                         yPredRFTest),
+  recall = Recall(yTest$label, 
+                   yPredRFTest),
+  accuracy = Accuracy(yTest$label, 
+                       yPredRFTest),
+  f1Score = F1_Score(yTest$label, 
+                       yPredRFTest)
+), confusionMatrix(table(yPredRFTest, yTest$label)))
+
+df_PerformanceRFTest
+
+
+# Make prediction (Train)
+yPredRFTrain <- predict(modelRF, xTrain)
+
+# Precision, Recall, Accuracy, F1-Score for label classification (Train)
+df_PerformanceRFTrain <- list(data.frame(
+  precision = Precision(yTrain$label, 
+                         yPredRFTrain),
+  recall = Recall(yTrain$label, 
+                   yPredRFTrain),
+  accuracy = Accuracy(yTrain$label, 
+                       yPredRFTrain),
+  f1Score = F1_Score(yTrain$label, 
+                       yPredRFTrain)
+), confusionMatrix(table(yPredRFTrain, yTrain$label)))
+
+df_PerformanceRFTrain
+
+```
+
+
+**Question 11: Model explanation and Findings discussion**
+
+Concerning motivations behind the selection of 4 models above, it is safe to say all those 4 models have been considered useful and been used by many researchers for image classification before. Wang, Fan, & Wang (2021) compared SVM to Convolutional Neural Network and the finding was that for small sample data sets, the accuracy of SVM even outperformed deep learning approach. Therefore, SVM appears to be a suitable traditional machine learning model for this task. For SVM, both linear and RBF kernel are included. It is widely acknowledged that for linear problems, linear SVM is the appropriate chocie whereas RBF kernel is best utilized for non-linear problems. However, non-linear SVM is more likely to lead to overfitting than linear SVM. To test their performance, I decide to keep both of them. After that, I also would like to try with L1-Regularized L2-Loss SVM to tackle overfitting issue. Excessive features and large coefficients are reasons behind overfitting; L2 penalizes large coefficients, resulting in smaller coefficients, while L1 shrinks coefficients proportinate to the importance of the features, leading to a drop of the number of features. Last, a random forest model is chosen to run. Random forest is a supervised machine learning algorithm that takes advantages of a ensemble of different decision trees and looks for the best features to construct the “forest”. In the study of Chugh, Bhatia, Khanna, & Bhatia (2020), random forest classifier was proved to suit image classification, just behind deep learning. Though deep learning is appealing, due to the limit of resources and time for this assignment, I do not opt for this technique.
+
+Overall, my expectation is that radial SVM will outperform linear SVM because nonlinear SVM is more flexible and can result in nonlinear support vectors for classification. However, the results are different from my estimation.
+
+Looking at the prediction models for train data set, it is obvious that most of them have perfect results, except for L1 L2 SVM. This is explainable because, in fact, all of the models are overfitting when we look at the results for the train versus the test data set. The models perform well for train data but poorly for test data.
+
+As I has expected, L1-Regularized L2-Loss SVM reduces the overall accuracy. However, to an extent, it solves the overfitting problems. The accuracy for train data and test data is nearly the same. The L1-Regularized L2-Loss SVM model here can detect more "drink" images, but at the expense of "food" and "inside".
+
+For test dataset, Linear SVM, radial SVM, and RF all have accuracy higher than 0.5, and these accuracies appear to be good for multi-class classification. However, accuracy is not always the best metric when it comes to image classification. Simply looking at the confusion matrix for each of the class, it is easy to see that here the classes in test data are seriously imbalanced. In fact, 51 pictures are about food, 32 are labeled “inside”, leaving only 17 pictures for the other two classes. 
+
+Which model among the 4 models above is the best classifier really depends on the reality and goal of Yelp’s manager. If this imbalanced test data set actually reflects the actual data and the profit for them simply relies on the overall accuracy of classifier, they ought to select model Radial SVM because it has higher accuracy score than the others, at 0.69. Another model to consider is Random Forest, with accuracy of 0.66.
+
+However, in reality, this may not be the case. Intuitively, one of the goal can be to ensure that all labels can be evenly detected. A model like Radial SVM here with accuracy of 0.69 but zero time successfully detecting the "drink" and "outside" images would not be ideal in that case. Even though L1-L2 SVM here has very low accuracy, but if the goal of the manager is to detect drink as much as possible because this label is harder to separate from food images (which are the majority), this model can be considered to be developed further because the recall of 0.5 for drink is far better than recall of nearly 0 in other models. Also, this model perform relatively the same for out-of-training data, which is useful for real-life deployment.
+
+In conclusion, fairly speaking, at least 3 out of the 4 models have higher predictive power than random classifier, although they are overfitting. Drink and outside are very difficult to predict.
+
+There are at least three things that can be done to tackle this. First, more data should be added, not only for the training and but also for testing. More importantly, imbalanced classes need to be solved because classifiers like SVM cannot perform ideally in such scenario. More images for drink and outside should be appended to the data. Second, features such as Gabor filter should be extracted and added to the predicting features, which will consume more time but bring better results. Third, deep learning approach should be seriously considered because it has been shown to bring better results than traditional machine learning method in big samples, and it saves the efforts to extract different features manually. 
+
+**References: **
+
+Chugh, R. S., Bhatia, V., Khanna, K., & Bhatia, V. (2020). A Comparative Analysis of Classifiers for Image Classification. 2020 10th International Conference on Cloud Computing, Data Science & Engineering (Confluence), 248-253.
+Wang, P., Fan, E., & Wang, P. (2021). Comparative analysis of image classification algorithms based on traditional machine learning and deep learning. Pattern Recognition Letters, 61-67.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

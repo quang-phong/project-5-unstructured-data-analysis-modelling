@@ -1,0 +1,441 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = normalizePath("D:/OneDrive/1st-goal-innovation/project-analyze-unstructured-data/9-exam"))
+knitr::opts_chunk$set(fig.width=12, fig.height=12) 
+```
+
+## Audio analysis: 8 credits
+
+Introduction of the assignment:
+- Purpose: to distinguish emergency vehicles from general traffic.
+- Data: 600 sound samples from Bose, including200 of ambulances (1-200), 200 of fire trucks (201-400) and 200 of general traffic (401-600). However, I will use 300.
+
+```{r, warning = FALSE, message = FALSE}
+# Install necessary libraries
+library(soundgen)
+library(seewave)
+library(tuneR)
+library(caret)
+library(e1071)
+library(MLmetrics)
+library(randomForest)
+```
+
+**Question 12: data loading and feature extraction** 
+
+Now, we use readWave() to read in the audio files into R.
+
+```{r}
+# Produce character vectors of the names of files in the named directory
+ambulanceFiles <- list.files(path = "ambulance", pattern = ".wav", full.names = T)
+fireTruckFiles <- list.files(path = "firetruck", pattern = ".wav", full.names = T)
+trafficFiles <- list.files(path = "traffic", pattern = ".wav", full.names = T)
+
+# Choose a random subset of 75 files (for each of ambulance and fire truck) and 150 files (for general traffic)
+set.seed(1010)
+selectedAmbulance <- sample(ambulanceFiles, 75)
+selectedFireTruck <- sample(fireTruckFiles, 75)
+selectedTraffic <- sample(trafficFiles, 150)
+
+# Apply readWave for all the files to create 2 datasets: Emergency and NotEmergency
+df_Emergency <- lapply(c(selectedAmbulance, selectedFireTruck), FUN = function (f) readWave(f))
+df_NotEmergency <- lapply(selectedTraffic, FUN = function (f) readWave(f))
+
+# See the dataset length
+length(df_Emergency)
+length(df_NotEmergency)
+```
+
+Here, I extract the fundamental frequency of each sound file using the fund(), including two features based on the fundamental frequency: The average frequency across the clip, and the standard deviation. Omit NA values from your calculations.
+    
+```{r}
+## For Emergency dataset
+
+fundaFreqEmergency <- lapply(df_Emergency, FUN = function(f) fund(f, plot = FALSE))
+
+# Omit NA values
+fundaFreqEmergency2 <- lapply(fundaFreqEmergency, FUN = function(f) na.omit(f))
+rm(fundaFreqEmergency)
+
+# Omit the sounds without any non-NA fundamental frequencies in the fundamental frequency list
+fundaFreqEmergency3 <- fundaFreqEmergency2[sapply(fundaFreqEmergency2, function(f) (nrow(f) > 0))]
+
+# Now look at the number of sounds left
+length(fundaFreqEmergency3)
+
+# Create a matrix with the the first column of 1 (1 = emergency vehicle)
+df_Emergency2 <- matrix(1, nrow = length(fundaFreqEmergency3), ncol = 1)
+
+# Calculate average frequency and standard deviation and merge it to newly created data set
+df_Emergency2 <- data.frame(cbind(df_Emergency2, 
+                                  t(vapply(fundaFreqEmergency3, 
+                                           FUN = function(f) 
+                                             c(meanFundaFreq = mean(f), sdFundaFreq = sd(f)), 
+                                           numeric(2)))))
+head(df_Emergency2)
+dim(df_Emergency2)
+```
+
+```{r}
+## Do similarly for NotEmergency dataset
+
+fundaFreqNotEmergency <- lapply(df_NotEmergency, FUN = function(f) fund(f, plot = FALSE))
+
+# Omit NA values
+fundaFreqNotEmergency2 <- lapply(fundaFreqNotEmergency, FUN = function(f) na.omit(f))
+rm(fundaFreqNotEmergency)
+
+# Omit the sounds without any non-NA fundamental frequencies in the fundamental frequency list
+fundaFreqNotEmergency3 <- fundaFreqNotEmergency2[sapply(fundaFreqNotEmergency2, function(f) (nrow(f) > 0))]
+
+# Now look at the number of sounds left
+length(fundaFreqNotEmergency3)
+
+# Create a matrix with the the first column of 0 (0 = emergency vehicle)
+df_NotEmergency2 <- matrix(0, nrow = length(fundaFreqNotEmergency3), ncol = 1)
+
+# Calculate average frequency and standard deviation and merge it to newly created data set
+df_NotEmergency2 <- data.frame(cbind(df_NotEmergency2, 
+                                     t(vapply(fundaFreqNotEmergency3, 
+                                              FUN = function(f)
+                                                c(meanFundaFreq = mean(f), sdFundaFreq = sd(f)),
+                                              numeric(2)))))
+head(df_NotEmergency2)
+dim(df_NotEmergency2)
+```
+
+The second feature I will extract is jitter, the average absolute difference in fundamental frequency across the clip. I will compute this using the fund() function.
+
+```{r}
+## For Emergency dataset
+
+# Create a function to calculate average absolute difference, given y as the index of column 
+CalculateAveAbsDiff <- function(x, y) {
+  sum <- 0
+  if (nrow(x) == 1) {
+    return(x[1, y])
+  }
+  else {
+  for (i in 1:(nrow(x)-1)) {
+    sum <- sum + abs((x[i, y] - x[i + 1, y]))
+  }
+  return(sum/(nrow(x)-1))
+  }
+}
+
+# Calculate jitter and merge it
+df_Emergency2$jitter <- sapply(fundaFreqEmergency3, CalculateAveAbsDiff, y=2)
+head(df_Emergency2)
+```
+
+
+```{r}
+## Do similarly for NotEmergency dataset
+
+# Calculate jitter and merge it
+df_NotEmergency2$jitter <- sapply(fundaFreqNotEmergency3, CalculateAveAbsDiff, y=2)
+head(df_NotEmergency2)
+```
+
+Next, I will extract shimmer. Shimmer is defined as the average absolute difference in amplitude across the clip. I will use the env() function with envt = “abs” to extract the amplitude across the clip, and compute the shimmer.
+
+```{r}
+## For Emergency dataset
+
+amplitudeEmergency <- lapply(df_Emergency, FUN = function(f)
+  env(f, envt = "abs", plot = FALSE))
+
+# Calculate shimmer and merge it
+df_Emergency2$shimmer <- sapply(amplitudeEmergency, 
+                                CalculateAveAbsDiff, y = 1)[sapply(fundaFreqEmergency2, 
+                                                                   function(f) (nrow(f) > 0))] 
+
+head(df_Emergency2)
+```
+```{r}
+## Do similarly for NotEmergency dataset
+
+amplitudeNotEmergency <- lapply(df_NotEmergency, FUN = function(f)
+  env(f, envt = "abs", plot = FALSE))
+
+# Calculate shimmer and merge it
+df_NotEmergency2$shimmer <- sapply(amplitudeNotEmergency, 
+                                   CalculateAveAbsDiff, y = 1)[sapply(fundaFreqNotEmergency2, 
+                                                                      function(f) (nrow(f) > 0))] 
+
+head(df_NotEmergency2)
+```
+
+Also, I will extract harmonic-to-noise ratio, pitch, loudness, and timbre. Using soundgen library, I will extract harmonic-to-noise ratio (mean and standard deviation), pitch (mean and standard deviation), loudness (mean and standard deviation), and timbre (as specCentroid, mean and standard deviation).
+
+```{r, warning = FALSE, message=FALSE}
+## For Emergency dataset
+
+CalculateFeatures <- function (x) {
+  return(analyze(x, pitchMethods = "autocor")$summary[, c("HNR_mean", "HNR_sd", 
+                                                          "pitch_mean", "pitch_sd", 
+                                                          "loudness_mean", "loudness_sd", 
+                                                          "specCentroidVoiced_mean", 
+                                                          "specCentroidVoiced_sd")])
+}
+
+df_Emergency2 <- data.frame(cbind(df_Emergency2,
+                                  t(sapply(df_Emergency[sapply(fundaFreqEmergency2, 
+                                                               function(f) (nrow(f) > 0))], 
+                                           CalculateFeatures))))
+
+head(df_Emergency2)
+```
+
+```{r, warning = FALSE}
+## Do similarly for NotEmergency dataset
+
+df_NotEmergency2 <- data.frame(cbind(df_NotEmergency2,
+                                     t(sapply(df_NotEmergency[sapply(fundaFreqNotEmergency2, 
+                                                                     function(f) (nrow(f) > 0))], 
+                                              CalculateFeatures))))
+
+head(df_NotEmergency2)
+```
+
+
+I have already created a binary variable (1 = emergency vehicle, 0 = general traffic) that can serve as my prediction target and add it to 2 datasets. Now, I will combine 2 datasets before splitting them to train-test set.
+
+```{r}
+df_Sound <- rbind(df_Emergency2, df_NotEmergency2)
+colnames(df_Sound)[1] <- "source"
+```
+
+Then I will split it to 80% for training, 20% for testing, with balanced classes in both dataset.
+
+```{r}
+# convert source variable into factor variable
+df_Sound$source <- as.factor(df_Sound$source)
+
+# convert all independent variables into numeric
+df_Sound[, c(2:13)] <- sapply(df_Sound[, c(2:13)], as.numeric)
+
+# Omit rows with NA values 
+df_Sound <- na.omit(df_Sound)
+
+# train-test data split using caret library
+set.seed(1015)
+trainIndex <- createDataPartition(df_Sound$source, p = .8, list = FALSE, times = 1)
+train <- df_Sound[trainIndex,]
+test <- df_Sound[-trainIndex,]
+xTrain <- subset(train, select = -source)
+yTrain <- subset(train, select = source)
+xTest <- subset(test, select = -source)
+yTest <- subset(test, select = source)
+```
+
+**Question 13: Prediction model**
+
+Here 3 different models will be used to predict the source of sound based on extracted acoustic features: logistic regression model, support vector machine (SVM), and random forest (RF).
+
+
+```{r}
+# Logistic classification model for source using glm()
+modelLogit <- glm(formula = source ~ .,
+                  family = binomial(link = "logit"),
+                  data = train)
+
+
+# Make prediction (test)
+yPredLogitTest <- predict(modelLogit, xTest, type="response")
+yPredLogitTest <- ifelse(yPredLogitTest>0.5, 1, 0)
+
+# Precision, Recall, Accuracy, F1-Score for source classification (test)
+df_PerformanceLogitTest <- list(data.frame(
+  precision = Precision(yTest$source, 
+                         yPredLogitTest,
+                         positive = 1),
+  recall = Recall(yTest$source, 
+                   yPredLogitTest,
+                   positive = 1),
+  accuracy = Accuracy(yTest$source, 
+                       yPredLogitTest),
+  f1Score = F1_Score(yTest$source, 
+                       yPredLogitTest)),
+  confusionMatrix(table(yPredLogitTest, yTest$source))
+)
+
+df_PerformanceLogitTest
+
+
+
+# Make prediction (train)
+yPredLogitTrain <- predict(modelLogit, xTrain, type="response")
+yPredLogitTrain <- ifelse(yPredLogitTrain>0.5, 1, 0)
+
+# Precision, Recall, Accuracy, F1-Score for source classification (test)
+df_PerformanceLogitTrain <- list(data.frame(
+  precision = Precision(yTrain$source, 
+                         yPredLogitTrain,
+                         positive = 1),
+  recall = Recall(yTrain$source, 
+                   yPredLogitTrain,
+                   positive = 1),
+  accuracy = Accuracy(yTrain$source, 
+                       yPredLogitTrain),
+  f1Score = F1_Score(yTrain$source, 
+                       yPredLogitTrain)),
+  confusionMatrix(table(yPredLogitTrain, yTrain$source))
+)
+
+df_PerformanceLogitTrain
+```
+
+
+
+```{r}
+# Linear SVM classification model for source using e1071 library
+modelSVMLinear <- svm(source ~ .,
+                  data = train,
+                  type = 'C-classification',
+                  kernel = 'linear')
+
+
+# Make prediction (test)
+yPredSVMLinearTest <- predict(modelSVMLinear, xTest)
+
+# Precision, Recall, Accuracy, F1-Score for source classification (test)
+df_PerformanceSVMLinearTest <- list(data.frame(
+  precision = Precision(yTest$source, 
+                         yPredSVMLinearTest,
+                         positive = 1),
+  recall = Recall(yTest$source, 
+                   yPredSVMLinearTest,
+                   positive = 1),
+  accuracy = Accuracy(yTest$source, 
+                       yPredSVMLinearTest),
+  f1Score = F1_Score(yTest$source, 
+                       yPredSVMLinearTest)),
+  confusionMatrix(table(yPredSVMLinearTest, yTest$source))
+)
+
+df_PerformanceSVMLinearTest
+
+
+
+# Make prediction (train)
+yPredSVMLinearTrain <- predict(modelSVMLinear, xTrain)
+
+# Precision, Recall, Accuracy, F1-Score for source classification (test)
+df_PerformanceSVMLinearTrain <- list(data.frame(
+  precision = Precision(yTrain$source, 
+                         yPredSVMLinearTrain,
+                         positive = 1),
+  recall = Recall(yTrain$source, 
+                   yPredSVMLinearTrain,
+                   positive = 1),
+  accuracy = Accuracy(yTrain$source, 
+                       yPredSVMLinearTrain),
+  f1Score = F1_Score(yTrain$source, 
+                       yPredSVMLinearTrain)),
+  confusionMatrix(table(yPredSVMLinearTrain, yTrain$source))
+)
+
+df_PerformanceSVMLinearTrain
+```
+
+
+
+
+
+```{r}
+# Random Forest classification model for source of sound
+
+modelRF <- randomForest(source ~ .,
+                        data = train,
+                        importance = TRUE,
+                        proximity = TRUE)
+
+
+
+# Make prediction (Test)
+yPredRFTest <- predict(modelRF, xTest)
+
+# Precision, Recall, Accuracy, F1-Score for source classification (Test)
+df_PerformanceRFTest <- list(data.frame(
+  precision = Precision(yTest$source, 
+                         yPredRFTest,
+                        positive = 1),
+  recall = Recall(yTest$source, 
+                   yPredRFTest,
+                  positive = 1),
+  accuracy = Accuracy(yTest$source, 
+                       yPredRFTest),
+  f1Score = F1_Score(yTest$source, 
+                       yPredRFTest)
+), confusionMatrix(table(yPredRFTest, yTest$source)))
+
+df_PerformanceRFTest
+
+
+# Make prediction (Train)
+yPredRFTrain <- predict(modelRF, xTrain)
+
+# Precision, Recall, Accuracy, F1-Score for source classification (Train)
+df_PerformanceRFTrain <- list(data.frame(
+  precision = Precision(yTrain$source, 
+                         yPredRFTrain,
+                        positive = 1),
+  recall = Recall(yTrain$source, 
+                   yPredRFTrain,
+                  positive = 1),
+  accuracy = Accuracy(yTrain$source, 
+                       yPredRFTrain),
+  f1Score = F1_Score(yTrain$source, 
+                       yPredRFTrain)
+), confusionMatrix(table(yPredRFTrain, yTrain$source)))
+
+df_PerformanceRFTrain
+
+```
+
+**Question 14: Result interpretation for logit model**
+
+```{r}
+summary(modelLogit)
+```
+
+Interestingly, although the logit model is perfect for prediction (see question 15 later), when we look into which variable affects the prediction ability through this table, we do not see any significant p-value (below 0.05). However, this is not due to the lack of variable that affects the prediction ability. Because the sample is not large (around 185 for train data), including 12 predictors is too much and they can be correlated with each other, which results in no significant coefficient.
+
+To see which variables significantly affect prediction ability and in which direction, I will run logit model 12 times. In each time, only one predictor is included. This will shed light on the signficance of each variable.
+
+
+```{r, warning = FALSE}
+for (x in c("meanFundaFreq", "sdFundaFreq", "jitter", "shimmer", "HNR_mean", "HNR_sd", 
+            "pitch_mean", "pitch_sd", "loudness_mean", "loudness_sd", 
+            "specCentroidVoiced_mean", "specCentroidVoiced_sd")) {
+  print(summary(glm(formula = paste("source ~ ", x ), family = binomial(link = 'logit'), data = train))$coefficient)
+}
+```
+
+It is easy to see that sdFundaFreq, jitter, shimmer, HNR_mean, HNR_sd, pitch_mean, loudness_mean, loudness_sd, specCentroidVoiced_mean, specCentroidVoiced_sd are variables that have statistically significant impact on dependent variable, as their P-values are below 0.05. Meanwhile, mean of fundamental frequency and standard deviation of pitch have no statistically significant impact on the prediction.
+
+Among them, 2 variables with the most considerable coefficients are HNR_sd (2.85) and loudness_sd (2.76), which are standard deviation of harmonic to noise ratio and standard deviation of loudness. This is understandable because it is very rare for general traffic to resemble the high standard deviation of loudness in ambulance and fire truck siren. 
+
+
+**Question 15: Model comparison**
+
+It is surprising that all the 3 models perform perfectly or almost perfectly in predicting which sound is from general traffic and which is from emergency vehicles for the test set. 
+
+Among them, logit model is the best one, with accuracy, recall, precision, F1-score as 1. Following that are Linear SVM and Random Forest, with accuracy of 0.98 and recall of 0.96. This is corresponding to 1 case of emergency vehicles but the models fail to predict. Nevertheless, the precision for both models is still perfect at 1, which means all the emergency prediction is accurate.
+
+This result is also due to the fact that relatively sufficient acoustic features have been extracted from the sound files, and there are many distinct differences between sounds from general traffic and sounds from emergency vehicles. To test which one will perform really consistently in out-of-sample data, it is necessary to include different sound files with more diverse acoustic features. For example, ambulance or fire truck siren sounds can be recorded in different distances from the sources, which reflects real-life scenario in which the noise-cancellation function in a headset should always perform properly. This will result in higher variety of acoustic features, which in turn makes it challenging for machine learning models to linearly predict the sources.
+
+Temporarily, for the purpose of embedding noise cancellation in Bose headset, any of the 3 models proves to be good enough to be selected. The best model is the logit model, as it has perfect recall compared to the other two models. It means headset users will not miss any single emergency sound signals from their surrounding environment, ensuring their safety. Besides, all the 3 models will guarantee comfort for users, as every time the headsets mute themselves, the users will realize it is a correct decision (precision = 1). The users will feel annoyed if the their headsets mute themselves when there is no emergency sounds outside, which is not observed in the models for test set here. 
+
+
+
+
+
+

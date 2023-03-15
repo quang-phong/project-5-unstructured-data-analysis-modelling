@@ -1,0 +1,323 @@
+---
+title: "EBC4223 - Assignment 2"
+author: "Quang Phong & Robert Agatić"
+date: "2/22/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = normalizePath("D:/OneDrive/1st-goal-innovation/project-analyze-unstructured-data/4-week4/assignment-2-graded"))
+```
+
+# INTRODUCTION
+In this assignment we will learn how to transform the review text into topics and word embedding underlying the text. We can use these extracted topics and embeddings for subsequent analyses.
+```{r, message=FALSE, warning=FALSE}
+# Load necessary libraries
+library(dplyr) # used for data manipulation
+library(tm) # used for text mining
+library(ldatuning) # used for identifying the number of topics in a text corpus
+library(topicmodels) # provides basic infrastructure for fitting topic models based on data structures from the text mining package tm
+library(tidytext) # applies the principles of the tidyverse to analyzing text
+library(wordcloud2) # a fast visualization tool for creating wordcloud
+library(wordcloud) # visual representation of text data
+library(reshape2) # used for data manipulation
+library(data.table) # used for fast aggregation of multiple columns
+library(word2vec) # used for getting word vectors and document vecotrs based on word2vec model
+```
+
+**Question 1: Load data**
+
+```{r}
+# Load the dataset from the assignment 1
+df_Reviews <- readRDS("df_Reviews.RDS")
+df_Movies <- readRDS("df_Movies.RDS")
+```
+
+# DATA PREPROCESSING AND ANALYSIS
+
+**Question 2: Create corpus**
+
+For latent dirichlet allocation (LDA), we need to view our set (corpus) of reviews as 2469 separate documents. We can do so by combining and applying the VectorSource() with the Corpus() functions to create a corpus of text. A corpus is a list of a document.
+```{r}
+# Create a corpus of text for the reviews
+corpus_Reviews <- Corpus(VectorSource(df_Reviews$review_text2))
+
+# Get the dimensions of the corpus
+str(corpus_Reviews)
+```
+**Question 3: Clean corpus**
+
+Now we clean the corpus.
+```{r}
+# Transform the corpus to a word frequency matrix
+dtm <- DocumentTermMatrix(corpus_Reviews)
+
+# Inspect detailed information of the corpus
+inspect(dtm)
+```
+```{r}
+# Removing words that do not occur in at least 10% of the documents 
+dtm2 <- removeSparseTerms(dtm, 0.9)
+
+# Inspect detailed information of the corpus
+inspect(dtm2)
+```
+From 29321 terms in the former matrix, we have reduced the number to only 154 terms in the latter matrix.
+
+Now we need to remove documents in which none of these 154 terms appear. This is necessary before doing LDA.
+```{r}
+# Create a matrix out of the new DocumentTermMatrix
+matrix_dtm <- as.matrix(dtm2)
+
+# Compute the rowSums() for each document 
+rowSums <- rowSums(matrix_dtm)
+
+# See which document(s) should be removed
+which(rowSums == 0)
+
+# Remove them from dtm2
+dtm2 <- dtm2[rowSums > 0, ]
+
+# Inspect detailed information of the corpus
+inspect(dtm2)
+```
+Two rows, 1031 and 2255, have been removed from the dtm2, resulting in the final number of 2467 rows.
+
+**Question 4: Determine the number of topics**
+
+Before we can estimate a topic model, we first need to determine the number of topics. This can be using the "ldatuning".
+```{r, eval=FALSE, echo=TRUE}
+result <- FindTopicsNumber(
+  dtm2,
+  topics = seq(from = 2, to = 25, by = 1),
+  metrics = c("Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 12),
+  verbose = TRUE
+  )
+```
+
+**Question 5: Estimate 12 latent topics**
+
+The package topicmodels is used to estimate the 12 latent topics, Apply the LDA function to the document term matrix with the number of topics as determined previously, and the same model specifications as in 4.
+```{r}
+lda <- LDA(dtm, k = 12, 
+           method= "Gibbs", 
+           control = list(seed = 1010, burnin = 4000, iter=2000)
+           )
+```
+
+**Question 6: View topics**
+
+Let's see the first 10 words of each topic.
+Following is the first method.
+```{r}
+terms(lda , 10)
+```
+Another way to do this is using tidytext package.
+```{r}
+lda_topics <- tidy(lda, matrix = "beta")
+
+lda_top_10_terms <- lda_topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+#Have a look of the first 20 rows
+lda_top_10_terms[1:20, ] 
+```
+
+We can go a little bit further by visualizing comparison clouds of the 10 top words in each topic using wordcloud, wordcloud2, and reshape 2 package.
+
+```{r}
+lda_top_10_terms %>%
+  acast(term ~ topic, value.var = "beta", fill = 0) %>%
+  comparison.cloud(colors = c("#720d50", "#ac2b78", "#a64ec2", 
+                              "#1b9dbc", "#b5cbda", "#84b586", 
+                              "#03947f", "#4aa874", "#ec9a02", 
+                              "#3b343e", "#c77144", "#247942" ),
+                   max.words = 120, # 120 because this shows top 10 of 12 topics.
+                   scale = c(3,.4)) # adjust scale so all 120 words have space to be plotted
+```
+Based on this observation, we can label a few topics. For example, topic 9 is about film elements such as character, plot, story. Topic 8 is about superhero-related world. Topic 7 is about horror movies. Topic 11 is about kid. Topic 1 is about music with elements such as song, performer, and music. Topic 4 is about overall tags such as good, enjoy, well, like, entertain. Topic 5 is about the audience's life: family, day, time, work, home, live, life. Topic 6 is about humor with words like comedy, funny, humor. However, it is still challenging to label all 12 topics differently. 
+
+**Question 7: Topic probability**
+
+Using the topics() function, we will extract the topic with the highest probability per review from the model. Then we will compare how these topics relate to the review-level polarity scores computed previously.
+```{r}
+# Add the topic with the highest probability to each document in reviews data
+df_Reviews$topic <- topics(lda, 1)
+
+# Get an quick look at the first 5 rows
+df_Reviews[1:5,c(1,8,9)]
+```
+
+
+```{r}
+# Compute the average polarity scores of reviews 
+df_Reviews %>% 
+  group_by(topic) %>% 
+  summarize(avg_polarity = mean(polarity))
+```
+We can see that reviews that fall in topic 4 shows highest polarity (0.53), followed by topic 12 (0.48) and topic 9 (0.42). Reviews belonging to topic 7 and 10 displays negative polarity. Topic 7 includes words such as horror, escape, death, etc. while  topic 10 contains words such as action, black, cop, kill, etc.
+
+**Question 8: Topic counts and regression**
+
+Now, we examine how the topics relate to revenue.
+```{r}
+# Count how often a topic is mentioned in relation to a movie
+array_count <- array(0, c(100,12))
+
+# Create data frame to count number of topics in reviews about every movie
+df_count <- df_Reviews %>%
+  group_by(movie_id, topic) %>%
+  count()
+
+# Get a quick look at the data frame
+head(df_count)
+
+# Run loop over the df_count table to add count numbers to the array_count
+for (i in 1:nrow(df_count)) {
+  a <- as.numeric(df_count[i, 1])
+  b <- as.numeric(df_count[i, 2])
+  array_count[a, b] <- as.numeric(df_count[i, 3])
+}
+
+head(array_count)
+```
+```{r}
+# Add the newly created array to the df_Movies before running regression
+df_Movies2 <- data.table(df_Movies)
+df_Movies2[, `:=` (topic1 = array_count[,1], 
+                  topic2 = array_count[,2], 
+                  topic3 = array_count[,3], 
+                  topic4 = array_count[,4], 
+                  topic5 = array_count[,5], 
+                  topic6 = array_count[,6], 
+                  topic7 = array_count[,7], 
+                  topic8 = array_count[,8], 
+                  topic9 = array_count[,9], 
+                  topic10 = array_count[,10], 
+                  topic11 = array_count[,11], 
+                  topic12 = array_count[,12])]
+
+head(df_Movies2)
+```
+```{r}
+# Run regression with revenue as dependent variable
+model1 <- lm(Gross ~ topic1+topic2+topic3+topic4+topic5+topic6
+             +topic7+topic8+topic9+topic10+topic11+topic12, data = df_Movies2)
+
+summary(model1)
+```
+
+
+
+```{r}
+# Run regression with ln of revenue as dependent variable
+model2 <- lm(lnGross ~ topic1+topic2+topic3+topic4+topic5+topic6
+             +topic7+topic8+topic9+topic10+topic11+topic12, data = df_Movies2)
+
+summary(model2)
+```
+
+```{r}
+# Run regression with revenue as dependent variable and topic12 as the only feature
+model3 <- lm(Gross ~ topic12, data = df_Movies2)
+
+summary(model3)
+```
+```{r}
+# Run regression with log of revenue as dependent variable and topic12 as the only feature
+model4 <- lm(lnGross ~ topic12, data = df_Movies2)
+
+summary(model4)
+```
+Based on the two models, topic 12 has a statistically significant positive association with the revenue although the size of coefficient is small. 
+
+
+Topic models try to extract latent topics from text using a generative model, which yields interpretable topic vectors. An alternative approach is that of word embeddings: Vectors that give the correlation between words, and allow to predict relations between words accurately. However, the vectors themselves are not interpretable, as they are numeric representations of the underlying text space. Thus, they mainly serve as input to predictive models. In R, we can use the library word2vec to estimate word embedding.
+
+**Question 9: Estimate word embedding by skip-gram model**
+
+We use the function word2vec() to estimate a skip-gram model on the review text. 
+```{r}
+set.seed(0) # to make sure the same ouput will be obtained during knitting
+sgm <- word2vec(df_Reviews$review_text)
+embd <- as.matrix(sgm)
+
+vocabulary_dt <- summary(sgm, type = "vocabulary")
+```
+
+**Question 10: Word embeddings**
+
+To get a feeling for what word embeddings can do, we use the predict() function to estimate the words closed related to an input word. For example, try to predict which 5 words relate to e.g., ‘war’ and ‘family, using type = ‘nearest’ and top_n = 5. Show some example with other words.
+```{r}
+predict(sgm, c("prison", "cop", "food", "kill", "wizard"), type = "nearest", top_n = 5)
+```
+As we can see, the word embeddings have predicted words related to chosen words fairly accurately and reasonably. For example, "save", "protect", "convince", "escape", "destroy" are predicted to be related to "kill" and "officer", "mysterious", "assistant" are predicted to be related to "cop", which make sense.
+
+
+**Question 11: Combined embeddings**
+
+Taking this one step further, we can also create new embeddings by combining word embeddings, and subsequently generate predictions using these combined embeddings.
+
+Store the result e.g., in a object pred. Now, we can use mathematical operations on the words we used to generate the embedding to generate a new embedding. For example, we could do pred[“war”,] + pred[“family”], and store this embedding. Then, again using the predict function as in 10), but now with newdata the previously created new embedding, we could predict which words relate closest to terms including both ‘war’ and ‘family’. Of course, we can also use subtraction and more words. Show some examples of different word combinations.
+```{r}
+# First, use the predict() function as before, but now with type = ‘embedding’.
+pred <- predict(sgm, c("prison", "cop", "wizard", "kill"), type = "embedding")
+head(pred)
+```
+
+```{r}
+emb1 <- pred["cop", ] + pred["wizard", ] +  pred["prison", ] + pred["kill",]
+
+predict(sgm, emb1, type = "nearest", top_n = 10)
+```
+
+```{r}
+emb2 <- - pred["cop", ] - pred["wizard", ] +  pred["prison", ] + pred["kill",]
+
+predict(sgm, emb2, type = "nearest", top_n = 10)
+```
+
+**Question 12: Document-level predictions**
+
+Finally, we can also use our Word2vec model to generate document-level predictions. This can be done using the doc2vec() function, with as inputs the model from 9) and the cleaned review text. This will generate word vectors for each review in the dataset. Using the polarity score from assignment 1 as dependent variable and the word vectors generated as independent variables, use linear regression to estimate which words vector relate to polarity. Shortly discuss your findings with respect to predictive ability. Note: as said, word embedding vectors are not interpretable, so there’s no need to try and interpret the vectors as we did with topics in topic modelling.
+```{r}
+embd_document <- as.data.frame(doc2vec(sgm, df_Reviews$review_text, type="embedding"))
+embd_document$polarity <- df_Reviews$polarity
+revenue_polarity <- lm(polarity~.,data=embd_document)
+summary(revenue_polarity)
+```
+As seen, the model can explain approximately 32% the changes in polarity scores. Word vectors 3, 12, 16, 17, 37 and 47 have statistically significant positive associations with polarity scores. Among which, the biggest coefficient belongs to vector 12 (0.57). Other vectors having marginally significant positive correlations with polarity scores are 6, 7, 10, 22, 30, 31. Meanwhile, word vectors 8, 21, 26, 27, 34, 43, and 49 have statistically significant negative associations with on polarity scores. Among which, the biggest coefficient belongs to vector 21 (-0.53379). Other vectors having marginally significant negative correlations with polarity scores are 4, 24, 29, 33, 38, 41, and 42. 
+
+### THE END.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
